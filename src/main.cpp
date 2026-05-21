@@ -17,22 +17,36 @@
 const char *VERTEX_SRC = R"(
 #version 430 core
 layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
 
 uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
 
+out vec3 vNormal; // pass normal to fragment shader (world space)
+
 void main() {
-	gl_Position = uProjection * uView * uModel *vec4(aPos, 1.0);
-	gl_PointSize = 4.0; // make points visible as small squares
+	gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+	// model has no rotation/scale here, so the normal passes through directly.
+	vNormal = mat3(uModel) * aNormal;
 }
 )";
 
 const char *FRAGMENT_SRC = R"(
 #version 430 core
+in vec3 vNormal;
 out vec4 FragColor;
+
+uniform vec3 uLightDir; // direction TO the light (normalized)
+uniform vec3 uColor;
+
 void main() {
-	FragColor = vec4(0.85, 0.87, 0.90, 1.0); // light gray points
+	vec3 N = normalize(vNormal);
+	// two-sided lighting: cloth has no "inside", light either face
+	float diff = abs(dot(N, normalize(uLightDir)));
+	vec3 ambient = 0.25 * uColor;
+	vec3 color = ambient + diff * uColor;
+	FragColor = vec4(color, 1.0);
 }
 )";
 
@@ -59,7 +73,6 @@ struct Camera {
 		return glm::lookAt(eye(), target, glm::vec3(0.0f, 1.0f, 0.0f));
 	}
 };
-
 Camera g_camera;
 
 // mouse drag state
@@ -179,6 +192,43 @@ GLuint make_program(const char *vsrc, const char *fsrc)
 	return prog;
 }
 
+// ----------------------------------------------------------------------------
+// Per-frame normal computation (display-only; lives here, not in cloth.h).
+// For each vertex, average the geometric normals of the triangles it
+// belongs to, using the index list to know the triangles.
+// ----------------------------------------------------------------------------
+void compute_normals(const std::vector<glm::vec3>& pos,
+		     const std::vector<unsigned int>& indices,
+		     std::vector<glm::vec3>& normals)
+{
+	normals.assign(pos.size(), glm::vec3(0.0f));
+
+	for (size_t t = 0; t + 2 < indices.size(); t += 3)
+	{
+		unsigned int i0 = indices[t];
+		unsigned int i1 = indices[t + 1];
+		unsigned int i2 = indices[t + 2];
+
+		glm::vec3 e1 = pos[i1] - pos[i0];
+		glm::vec3 e2 = pos[i2] - pos[i0];
+		glm::vec3 fn = glm::cross(e1, e2); // face normal (not normalized:
+						   // larger triangles weigh more
+
+		normals[i0] += fn;
+		normals[i1] += fn;
+		normals[i2] += fn;
+	}
+
+	for (auto& n : normals)
+	{
+		float len = glm::length(n);
+		if (len > 1e-9f)
+		{
+			n /= len;
+		}
+	}
+}
+
 int main()
 {
 	// --- initialize GLFW and request and OpenGL 4.3 Core context ---
@@ -192,7 +242,7 @@ int main()
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
 	// --- create the window ---
-	GLFWwindow *window = glfwCreateWindow(1280, 720, "gaucloth", nullptr, nullptr);
+	GLFWwindow *window = glfwCreateWindow(1920, 1080, "gaucloth", nullptr, nullptr);
 	if (!window)
 	{
 		std::cerr << "Failed to create GLFW window\n";
@@ -221,29 +271,30 @@ int main()
 	// --- physics: build the cloth, pin the top corners ---
 	const int GRID_N = 20;
 	const float GRID_SPACE = 0.1f;
-
 	Cloth cloth;
 	cloth.init_grid(GRID_N, GRID_SPACE);
-	
-	// top row is i = N-1 in our grid; pin its two corners
 	cloth.pin(cloth.index(GRID_N - 1, 0));
 	cloth.pin(cloth.index(GRID_N - 1, GRID_N - 1));
 
-	std::cout << "constraints: " << cloth. constraints.size() << "\n";
-	int c0 = cloth.index(GRID_N - 1, 0);
-	int c1 = cloth.index(GRID_N - 1, GRID_N - 1);
-	std::cout << "corner indices: " << c0 << ", " << c1 << "\n";
-	std::cout << "inv_mass at corners: " << cloth.inv_mass[c0]
-		  << ", " << cloth.inv_mass[c1] << "\n";
+	// --- static triangle connectivity (built once) ---
+	std::vector<unsigned int> indices = cloth.build_indices();
+	const GLsizei index_count = (GLsizei)indices.size();
 
-	const int point_count = GRID_N * GRID_N;
+	// normals buffer (recomputed each frame)
+	std::vector<glm::vec3> normals;
+	compute_normals(cloth.positions, indices, normals);
 
-	// --- rendering buffers (positions now change every frame -> DYNAMIC) ---
-	GLuint vao, vbo;
+	// --- rendering buffers: VAO + position VBO + normal VBO + index EBO ---
+	GLuint vao, vboPos, vboNrm, ebo;
 	glGenVertexArrays(1, &vao);
-	glGenBuffers(1, &vbo);
+	glGenBuffers(1, &vboPos);
+	glGenBuffers(1, &vboNrm);
+	glGenBuffers(1, &ebo);
+
 	glBindVertexArray(vao);             // start recording layout into VAO
-	glBindBuffer(GL_ARRAY_BUFFER, vbo); // the VBO we're describing
+
+	// position buffer -> attribute location 0 (dynamic: updates each frame)
+	glBindBuffer(GL_ARRAY_BUFFER, vboPos); // the VBO we're describing
 
 	// allocate space sized to the position array; fill it each frame below
 	glBufferData(GL_ARRAY_BUFFER,
@@ -254,6 +305,24 @@ int main()
 	// layout: location 0, 3 floats per vertex, tightly packed
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
 	glEnableVertexAttribArray(0);
+
+	// normal buffer -> attribute location 1 (dynamic: recomputed each frame)
+	glBindBuffer(GL_ARRAY_BUFFER, vboNrm);
+	glBufferData(GL_ARRAY_BUFFER,
+		     normals.size() * sizeof(glm::vec3),
+		     normals.data(),
+		     GL_DYNAMIC_DRAW);
+
+	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
+	glEnableVertexAttribArray(1);
+
+	// index buffer (static)
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, 
+		     indices.size() * sizeof(unsigned int),
+		     indices.data(),
+		     GL_STATIC_DRAW);
+
 	glBindVertexArray(0); // done recording
 
 	// --- one-time setup: shaders ---
@@ -261,7 +330,12 @@ int main()
 	GLint locModel = glGetUniformLocation(program, "uModel");
 	GLint locView = glGetUniformLocation(program, "uView");
 	GLint locProj = glGetUniformLocation(program, "uProjection");
+	GLint locLight = glGetUniformLocation(program, "uLightDir");
+	GLint locColor = glGetUniformLocation(program, "uColor");
+
 	glm::mat4 model = glm::mat4(1.0f); // grid sits at origin, no transform
+	glm::vec3 lightDir = glm::normalize(glm::vec3(0.4f, 1.0f, 0.6f));
+	glm::vec3 clothColor = glm::vec3(0.45f, 0.55f, 0.75f);
 
 	const float dt = 1.0f / 60.0f; // fixed timestep
 	
@@ -273,11 +347,19 @@ int main()
 		// --- PHYSICS: advance the simulation ---
 		cloth.step(dt);
 
-		// --- HANDOFF: copy updated positions into the VBO ---
-		glBindBuffer(GL_ARRAY_BUFFER, vbo);
+		// --- recompute normals from new positions (display-only) ---
+		compute_normals(cloth.positions, indices, normals);
+
+		// --- HANDOFF: upload positions and normals ---
+		glBindBuffer(GL_ARRAY_BUFFER, vboPos);
 		glBufferSubData(GL_ARRAY_BUFFER, 0,
 				cloth.positions.size() * sizeof(glm::vec3),
 				cloth.positions.data());
+
+		glBindBuffer(GL_ARRAY_BUFFER, vboNrm);
+		glBufferSubData(GL_ARRAY_BUFFER, 0,
+				normals.size() * sizeof(glm::vec3),
+				normals.data());
 
 		// --- RENDER ---
 		int fbw, fbh;
@@ -294,9 +376,11 @@ int main()
 		glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(model));
 		glUniformMatrix4fv(locView, 1, GL_FALSE, glm::value_ptr(view));
 		glUniformMatrix4fv(locProj, 1, GL_FALSE, glm::value_ptr(proj));
+		glUniform3fv(locLight, 1, glm::value_ptr(lightDir));
+		glUniform3fv(locColor, 1, glm::value_ptr(clothColor));
 
 		glBindVertexArray(vao);
-		glDrawArrays(GL_POINTS, 0, point_count);
+		glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_INT, 0);
 
 		glfwSwapBuffers(window);
 		glfwPollEvents();
@@ -304,7 +388,9 @@ int main()
 
 	// --- cleanup ---
 	glDeleteVertexArrays(1, &vao);
-	glDeleteBuffers(1, &vbo);
+	glDeleteBuffers(1, &vboPos);
+	glDeleteBuffers(1, &vboNrm);
+	glDeleteBuffers(1, &ebo);
 	glDeleteProgram(program);
 	glfwTerminate();
 	return 0;

@@ -108,6 +108,36 @@ struct Cloth {
 	}
 
 	// --------------------------------------------------------------------
+	// Triangle connectivity for rendering the grid as as surface.
+	// --------------------------------------------------------------------
+	std::vector<unsigned int> build_indices() const
+	{
+		std::vector<unsigned int> idx;
+		idx.reserve((N - 1) * (N - 1) * 6); // 2 triangles * 3 verts per cell
+		for (int i = 0; i < N - 1; ++i)
+		{
+			for (int j = 0; j < N - 1; ++j)
+			{
+				unsigned int tl = index(i, j);
+				unsigned int tr = index(i, j + 1);
+				unsigned int bl = index(i + 1, j);
+				unsigned int br = index(i + 1, j + 1);
+
+				// triangle 1
+				idx.push_back(tl);
+				idx.push_back(bl);
+				idx.push_back(tr);
+
+				// triangle 2
+				idx.push_back(tr);
+				idx.push_back(bl);
+				idx.push_back(br);
+			}
+		}
+		return idx;
+	}
+
+	// --------------------------------------------------------------------
 	// Solve one distance constraint (the core XPBD update).
 	//   C = |pa - pb| - L0
 	//   n = (pa - pb) / |pa - pb|
