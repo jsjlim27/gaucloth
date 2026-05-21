@@ -26,6 +26,16 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(glfw)
 
+# GLM: header-only math library (vectors, matrices, lookAt, perspective).
+# Header-only, so this just makes the headers available -- nothing to build.
+FetchContent_Declare(
+	glm
+	GIT_REPOSITORY https://github.com/g-truc/glm.git
+	GIT_TAG 1.0.1
+)
+
+FetchContent_MakeAvailable(glm)
+
 # OpenGL: provided by the system GPU drivers (this is fine to require --
 # every machine with working graphics already has it).
 find_package(OpenGL REQUIRED)
@@ -45,5 +55,6 @@ target_include_directories(gaucloth PRIVATE
 
 target_link_libraries(gaucloth PRIVATE
 	glfw
+	glm::glm
 	OpenGL::GL
 )
