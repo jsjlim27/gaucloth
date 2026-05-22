@@ -32,7 +32,7 @@ real-time simulation, rendering, and parameter-estimation downstream.
 Early development. Currently:
 
 - [x] Window + OpenGL 4.3 core context (GLFW + GLAD)
-- [ ] Cloth grid geometry and orbit camera
+- [x] Cloth grid geometry and orbit camera
 - [ ] XPBD stretch + bending constraints
 - [ ] Collision and user interaction
 - [ ] Mesh-embedded Gaussian splat rendering
