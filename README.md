@@ -2,6 +2,8 @@
 
 A real-time C++/OpenGL renderer for physics-based Gaussian cloth.
 
+https://github.com/user-attachments/assets/32b52397-f553-435b-8805-e2a5d49c0884
+
 ## Overview
 
 `gaucloth` is a master's capstone project exploring **real-time simulation and
