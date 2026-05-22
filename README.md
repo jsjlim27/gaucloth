@@ -64,7 +64,8 @@ development headers, which are present on most desktop Linux installations.
 gaucloth/
 ├── CMakeLists.txt        # portable build (FetchContent GLFW + vendored GLAD)
 ├── src/
-│   └── main.cpp          # application entry point
+│   ├── main.cpp          # window, rendering, camera, and the render loop
+│   └── cloth.h           # XPBD cloth simulation (physics only — no OpenGL)
 └── external/
     └── glad/             # vendored OpenGL loader (generated, committed)
 ```
